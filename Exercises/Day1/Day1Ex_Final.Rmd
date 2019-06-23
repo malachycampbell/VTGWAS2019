@@ -1,0 +1,436 @@
+---
+title: "Day1_1020.1200 - GWAS exercises"
+author: "Malachy Campbell"
+date: "6/23/2019"
+header-includes:
+   - \usepackage{bbm}
+   - \usepackage{amsmath}
+output:
+  rmdformats::html_clean:
+    highlight: kate
+    self_contained: no
+---
+
+The goal of this exercise is to introduce participants to popular software for preprocessing SNP data and running GWAS in R. We will use PLINK to preprocess two SNP datasets. 
+
+## Imputed rice data
+The first dataset consists of imputed SNP data for 1,568 rice accessions. These accessions are from the rice diversity panels (rice diversity panel1, rice diversity panel2), which have been genotyped using 44k SNPs and 700k SNPs. The authors used resequencing data for a larger panel of 3,000 rice accessions to impute more than 5 million SNPs for the 1,568 accessions. Details regarding the accessions and imputation approach are decribed in [Wang et al (2018)](https://www.nature.com/articles/s41467-018-05538-1#Abs1). Given the size of the dataset, we not work directly with this data for the workshop.
+
+I will utilize this data to give participants an idea about how to process large datasets in PLINK. Using PLINK I will (1) extract SNP data for a subset of accessions, (2) prune SNPs that are in high LD, and (3) remove SNPs with low MAF.
+
+### PLINK
+PLINK is a set of command line tools that can be used to process SNP data, assess population structure, and perform GWAS. However for the latter two there are many R packages that much more robust than PLINK. 
+
+We won't do any hands on exercises with PLINK. However if you are interested in using PLINK in your own studies, you can download it [here](https://www.cog-genomics.org/plink/1.9/). Once it is downloaded you will need to add the directory to your path. This allows PLINK to be called directly from the command line.
+
+#### PLINK files
+PLINK accepts genotype data in several different formats. The classic format is the PED/fam/map set of files. PED files hold the SNP genotype data and phenotype data. Accessions/individuals are listed in the rows and SNPs are stored in the columns (actually each allele is given its own column). The first six columns are 
+* Family ID
+* Individual ID
+* Paternal ID
+* Maternal ID
+* Sex (1=male; 2=female; other=unknown)
+* Phenotype
+The first two can be used to store the accession IDs and the remaining can be filled with missing data (-9 in PLINK is missing). The FAM files are basically the first six columns of the PED file. The MAP file lists the SNP positions (BP and/or CM), names, and chromosome numbers.
+
+There is also the binary equivalent of the PED/FAM/MAP files, these are BED/FAM/BIM files. They contain exactly the same information but are much more efficient for large datasets.
+
+PLINK also accepts VCF (variant call format) files, 23andMe format, as well as several other formats that are less popular in plant studies.
+
+####  Basic PLINK command
+Generally what I use PLINK for is processing SNP data. So the workflow is to read some file in, apply some filter, and output the file. In the code below we will read in a binary (BED) formatted file and write a text (PED) file out. We specify that the input data is in binary format using the --bfile argument. If the data was in text format we would use --file.
+
+
+```{bash, echo = T, eval = F}
+plink --bfile RICE_RP_mLIDs --recode --out RICE_RP_text
+```
+
+--recode will generate a text (PED) formatted file after applying some filters. Here nothing is specified, so it will be the same data as RICE_RP_mLIDs, but in text (PED) format.
+
+#### Extracting SNP data for a subset of individuals
+Here, we will extract SNP data for a subset of accessions that have phenotypes. To do this, you need a text file that lists the accessions you want to subset. This file will be created in R. A quick breakdown of what we are doing:
+
+1. Load phenotype file
+2. Find which accessions have phenotype and genotype data
+3. Load the FAM file for all 1,568 accessions and subset for phenotyped and genotyped accessions
+4. Write subsetted FAM file to disk. This will be used as input for PLINK
+```{r, echo = F, eval = F}
+UNL <- read.csv("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/UNL_Phenotypes.csv")
+FAM <- read.table("~/Downloads/RICE_RP/RICE_RP_mLIDs.fam")[1:2]
+
+HDRAacc <- read.delim("~/Downloads/HDRAacc.txt", sep = "\t", header = T)
+HDRAacc <- HDRAacc[grep(pattern = "NSFTV", HDRAacc$Other.accession.ID) ,]
+HDRAacc$Other.accession.ID <- sub("NSFTV", "NSFTV_", HDRAacc$Other.accession.ID)
+HDRAacc <- HDRAacc[c("Other.accession.ID", "HDRA.genotype.assay.ID")]
+
+UNL <- merge(HDRAacc, UNL, by.y = "NSFTV.ID", by.x = "Other.accession.ID", all = F)
+colnames(UNL)[1:2] <- c("NSFTV.ID", "HDRA.ID")
+write.csv(UNL , "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/VT_Phenotypes.csv", row.names = F)
+```
+
+```{r, echo = T, eval = F}
+phenos <- read.csv("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/VT_Phenotypes.csv")
+FAM <- read.table("~/Downloads/RICE_RP/RICE_RP_mLIDs.fam")[1:2]
+
+FAM <- FAM[FAM$V1 %in% phenos$HDRA.ID ,] #365 accessions
+
+phenos <- phenos[phenos$HDRA.ID %in% FAM$V1 ,]
+write.csv(phenos , "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/VT_Phenotypes.csv", row.names = F)
+write.table(FAM, "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Accs2Keep.txt", sep = "\t", col.names = F, row.names = F, quote = F)
+```
+
+This will load the full dataset, extract the SNP data for accesssions in the Accs2Keep.txt file, and create a new set of binary files called VTrice.
+```{bash, echo = T, eval = F}
+plink --bfile ~/Downloads/RICE_RP/RICE_RP_mLIDs --keep ~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Accs2Keep.txt --make-bed --out ~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice
+```
+
+The output...
+```{bash, echo = T, eval = F}
+PLINK v1.90b4.1 64-bit (30 Mar 2017)           www.cog-genomics.org/plink/1.9/
+(C) 2005-2017 Shaun Purcell, Christopher Chang   GNU General Public License v3
+Logging to /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice.log.
+Options in effect:
+  --bfile /Users/malachycampbell/Downloads/RICE_RP/RICE_RP_mLIDs
+  --keep /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Accs2Keep.txt
+  --make-bed
+  --out /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice
+
+16384 MB RAM detected; reserving 8192 MB for main workspace.
+5231433 variants loaded from .bim file.
+4591 people (0 males, 0 females, 4591 ambiguous) loaded from .fam.
+Ambiguous sex IDs written to
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice.nosex
+.
+--keep: 365 people remaining.
+Using 1 thread (no multithreaded calculations invoked).
+Before main variant filters, 365 founders and 0 nonfounders present.
+Calculating allele frequencies... done.
+5231433 variants and 365 people pass filters and QC.
+Note: No phenotypes present.
+--make-bed to
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice.bed
++
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice.bim
++
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice.fam
+... done.
+```
+
+#### Pruning the dataset
+Sometimes it is usefull to remove SNPs that have high LD. Here, will find what SNPs are in tight linkage. The indep command takes a window, calculates LD between all SNPs in that window, and removes those that exceed some threshold. The marker with the higher MAF is kept. PLINK uses the variance inflation factor (VIF) $VIF = \frac{1}{1 - r^2}$ as a metric for linkage. I will remove SNPs that are in very tight linkage ($r \geq 0.99$). So the VIF will be $VIF = \frac{1}{1 - 0.80^2} = 2.777778$.
+
+It is important to note that PLINK does not do any filtering when the indep arguement is used. PLINK will output two files that list the SNPs with $VIF < thresh$ in the .in file and $VIF \geq thresh$ in the .out file.
+
+```{bash, echo = T, eval = F}
+plink --bfile ~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice --indep 10 5 2.777778 --make-bed --out ~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned
+```
+
+The output...
+```{bash, echo = T, eval = F}
+PLINK v1.90b4.1 64-bit (30 Mar 2017)           www.cog-genomics.org/plink/1.9/
+(C) 2005-2017 Shaun Purcell, Christopher Chang   GNU General Public License v3
+Logging to /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned.log.
+Options in effect:
+  --bfile /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice
+  --indep 10 5 2.777778
+  --make-bed
+  --out /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned
+
+16384 MB RAM detected; reserving 8192 MB for main workspace.
+5231433 variants loaded from .bim file.
+365 people (0 males, 0 females, 365 ambiguous) loaded from .fam.
+Ambiguous sex IDs written to
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned.nosex
+.
+Using 1 thread (no multithreaded calculations invoked).
+Before main variant filters, 365 founders and 0 nonfounders present.
+Calculating allele frequencies... done.
+5231433 variants and 365 people pass filters and QC.
+Note: No phenotypes present.
+--make-bed to
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned.bed
++
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned.bim
++
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned.fam
+... done.
+Pruned 373200 variants from chromosome 1, leaving 248680.
+Pruned 279799 variants from chromosome 2, leaving 193116.
+Pruned 265348 variants from chromosome 3, leaving 174968.
+Pruned 265869 variants from chromosome 4, leaving 196661.
+Pruned 230390 variants from chromosome 5, leaving 148659.
+Pruned 287508 variants from chromosome 6, leaving 191051.
+Pruned 249895 variants from chromosome 7, leaving 165879.
+Pruned 243153 variants from chromosome 8, leaving 198439.
+Pruned 179336 variants from chromosome 9, leaving 132674.
+Pruned 204244 variants from chromosome 10, leaving 144218.
+Pruned 254068 variants from chromosome 11, leaving 215808.
+Pruned 222199 variants from chromosome 12, leaving 166271.
+Pruning complete.  3055009 of 5231433 variants removed.
+Marker lists written to
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned.prune.in
+and
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned.prune.out
+.
+```
+
+
+Now we will extract the SNPs that do not exceed that threshold and remove SNPs with a MAF $\leq 0.05$
+```{bash, echo = T, eval = F}
+plink --bfile /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice --maf 0.05 --extract /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned.prune.in --make-bed --out /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf
+```
+
+The output...
+```{bash, echo = T, eval = F}
+PLINK v1.90b4.1 64-bit (30 Mar 2017)           www.cog-genomics.org/plink/1.9/
+(C) 2005-2017 Shaun Purcell, Christopher Chang   GNU General Public License v3
+Logging to /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf.log.
+Options in effect:
+  --bfile /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice
+  --extract /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_pruned.prune.in
+  --maf 0.05
+  --make-bed
+  --out /Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf
+  --recode
+
+16384 MB RAM detected; reserving 8192 MB for main workspace.
+5231433 variants loaded from .bim file.
+365 people (0 males, 0 females, 365 ambiguous) loaded from .fam.
+Ambiguous sex IDs written to
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf.nosex
+.
+--extract: 2176424 variants remaining.
+Using 1 thread (no multithreaded calculations invoked).
+Before main variant filters, 365 founders and 0 nonfounders present.
+Calculating allele frequencies... done.
+983225 variants removed due to minor allele threshold(s)
+(--maf/--max-maf/--mac/--max-mac).
+1193199 variants and 365 people pass filters and QC.
+Note: No phenotypes present.
+--make-bed to
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf.bed
++
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf.bim
++
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf.fam
+... done.
+--recode ped to
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf.ped
++
+/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf.map
+... done.
+```
+
+This is the dataset that is made available to everyone.
+
+## GWAS
+I will demonstrate the use of two different R packages for running GWAS: GAPIT and rrBLUP. These two packages essentially run the same models, but offer more or less options. Most of the work is in formatting the input files. The downside of these packages is they assume there is only a single observation for each individual. So the workflow for these (which we will not discuss in this workshop) is to calculate best linear unbiased estimates (BLUEs) or LSMeans from the raw phenotype data and to use this as an input to these packages. So basically a two-step approach.
+
+rrBLUP and sommer are maintained by CRAN, GAPIT is not.
+
+### rrBLUP
+The first step is formatting the data correctly. We can run a mixed model for GWAS with the rrBLUP function GWAS.
+
+```{r, echo = T, eval = T}
+#install.packages("rrBLUP") #install it if you haven't already
+library(rrBLUP) #load the package
+
+?GWAS #get help for the function
+```
+
+
+#### Formatting SNP data for rrBLUP
+rrBLUP accepts genotypic data as dataframe. The first three columns are: marker names, chromosome and position. The subsequent columns list the SNP genotypes in numeric format. Here, aa = -1, Aa = 0, and AA = 1. It doesn't matter which allele (major or minor) is considered A or a.
+
+To format the SNP data will will use the GASTON package. The bed file can be read in using the read.bed.matrix function. All you need to do is supply the path and basename of the PLINK files
+```{r, echo = T, eval = T}
+#install.packages("gaston") #install it if you haven't already
+library(gaston)
+
+SNPs <- read.bed.matrix(basename = "/Users/malachycampbell/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Genotypes/VTrice_thinned_maf")
+```
+
+GASTON doesn't hold the marker data in memory, so it is nice for big datasets. However, it holds all the other information in the FAM and MAP file. We can check out what is stored in SNPs.
+```{r, echo = T, eval = T}
+str(SNPs)
+```
+
+We can perform filtering on the SNPs, even without holding the markers in memory. However, these steps aren't necessary since we already did our filtering in PLINK.
+
+```{r, echo = T, eval = F}
+SNPs <- select.snps(SNPs, maf > 0.05)
+dim(SNPs)
+SNPs <- select.snps(SNPs, callrate > 0.9)
+dim(SNPs)
+```
+
+Let's extract the marker data and format it for rrBLUP.
+```{r, echo = T, eval = T}
+genos <- as.matrix(SNPs)
+row.names(genos) <- paste0("X", row.names(genos))
+dim(genos) # A BIG n x m matrix
+head(genos[,1:3]) #SNPs are coded as 0, 1, 2
+
+genos <- genos - 1 #Now they are coded as -1, 0, 1
+
+#Recall rrBLUP likes the genotypes to be in a dataframe with the first 3 columns giving the marker information
+genos <- data.frame(rs = SNPs@snps$id, chr = SNPs@snps$chr, bp = SNPs@snps$pos, t(genos))
+
+#Since this is a huge dataset it will take a very long time to run. For the demonstration purposes we will randomly select a subset of 50,000 SNPs.
+set.seed(123)
+genoIndx <- sample(1:nrow(genos), size = 50000, replace = F)
+
+genos <- genos[genoIndx ,]
+table(genos$chr)
+```
+
+#### Formatting phenotypes for rrBLUP
+The phenotypes should be stored in a dataframe where the first column in the "gid", which should match the columns of genos (4th column on).
+```{r, echo = T, eval = T}
+phenos <- read.csv("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/VT_Phenotypes.csv")
+phenos <- data.frame(gid = paste0("X", phenos$HDRA.ID), Y = phenos$Na.Root.LSMEAN)
+head(phenos)
+
+phenos <- phenos[match(colnames(genos)[4:ncol(genos)], phenos$gid) ,]
+```
+
+#### Running GWAS with rrBLUP
+Running GWAS is pretty simple. rrBLUP will calculate the kinship matrix for you using their A.mat function. Moreover, if you already know the number of PC's you want to include in your model, then there is no need to supply the function with PCs. rrBLUP will do this for you.
+```{r, echo = T, eval = T}
+Rt.Na.GWAS <- GWAS(pheno = phenos, geno = genos, fixed = NULL, K = NULL, n.PC = 0,
+     min.MAF=0.05, n.core = 1, P3D = TRUE, plot = F)
+
+#The kinship matrix will be estimated by rrBLUP. Alternatively we can supply our own.
+#P3D = T means that the variance components will be estimated once using a model without any SNP effects. Then these values will be used as input for all other SNPs.
+#n.PC: the number of PCs. From the lecture it seems that population structure was adequately accounted for using just the kinship matrix
+
+head(Rt.Na.GWAS) # The output is a dataframe with the marker name, chromosome, postion and -log10(p) value
+```
+
+#### Plotting the results
+The GASTON package provides some nice functions for plotting the results from GWAS analysis.
+```{r, echo = T, eval = T}
+Rt.Na.GWAS$p <- 10^(-Rt.Na.GWAS$Y)
+colnames(Rt.Na.GWAS)[3] <- "pos"
+manhattan(Rt.Na.GWAS)
+```
+
+```{r, echo=FALSE, out.width='.49\\linewidth', fig.width=5, fig.height=3,fig.align='center'}
+manhattan(Rt.Na.GWAS)
+```
+
+```{r, echo=FALSE, out.width='.49\\linewidth', fig.width=3, fig.height=3,fig.align='center'}
+qqplot.pvalues(Rt.Na.GWAS)
+```
+
+Lets write the phenotype and genotype data to disk for future use.
+```{r, echo = T, eval = T}
+write.table(genos, "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/NumericGenos.txt", sep = "\t", col.names = T, row.names = F, quote = F)
+
+write.csv(phenos, "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Phenotypes.csv", row.names = F)
+```
+
+### GAPIT
+GAPIT is a set of tools for GWAS and genomic prediction. It is quite useful and provides a number of diagonostic plots for GWAS. Like rrBLUP a lot of the work is done behind the scenes. The GAPIT documentation is available [here](http://www.zzlab.net/GAPIT/).
+
+#### Installing the prerequisites
+Since this is not maintained by CRAN, we will have to install all the prerequisites and download the functions from their website.
+
+```{r, echo = T, eval = T}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+#BiocManager::install("multtest")
+
+#install.packages("gplots")
+#install.packages("LDheatmap")
+#install.packages("genetics")
+#install.packages("MASS")
+##install.packages("compiler")
+#install.packages("scatterplot3d")
+
+library(multtest)
+library(gplots)
+library(LDheatmap)
+library(genetics)
+library(MASS)
+library(compiler)
+library(scatterplot3d)
+
+setwd("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/GAPIT")
+
+source("http://zzlab.net/GAPIT/emma.txt")
+source("http://zzlab.net/GAPIT/gapit_functions.txt")
+```
+
+#### Input for GAPIT
+GAPIT accepts SNP data in two formats: HapMap and numeric (0,1,2 for aa, Aa, and AA). In almost all cases it will be much more convienient to convert your SNP data to numeric format as above.
+
+```{r, echo = T, eval = T}
+genos <- read.table("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/NumericGenos.txt", sep = "\t", header = T)
+genos <- genos[order(genos$chr, genos$bp) ,]
+phenos <- read.csv("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day1Ex/Phenotypes.csv")
+```
+
+When using numeric genotype data, GAPIT requires two objects: (1) the MAP file (chromosome, position) and (2) the genotypes (0,1,2 format). In the GAPIT function we specify these objects with the GM and GD arguments, respectively. GD has markers in the columns and accessions in the rows. This information is already contained in the genos object.
+
+The phenotypes are stored in a dataframe where the first column is the accession id's and the subsequent columns are the phenotypes.
+```{r, echo = T, eval = T}
+myGM <- genos[1:3]
+mrks <- t(genos[4:ncol(genos)])
+mrks <- mrks + 1
+myGD <- data.frame(Taxa = colnames(genos)[4:ncol(genos)], mrks)
+colnames(myGD)[2:ncol(myGD)] <- as.character(genos$rs)
+
+colnames(phenos)[1] <- "Taxa"
+```
+
+
+#### GWAS with GAPIT
+The best thing about GAPIT is that it offers several algorithms for GWAS. While these all essentially do the same thing (solves a LMM), there are certainly differneces in performance between algorithms. Below is a brief summary of the methods:
+
+* LMM: This is the base LMM that is run with GWAS.
+* P3D: The P3D method estimates variance components once using a model without SNP effects and solutions are used for each SNP
+* [Compressed Mixed linear model (CMLM)](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2931336/): Rather thank calculating the kinship between individuals, CMLM clusters the accessions into smaller groups and estimates the relationships between groups.
+* [Enriched CMLM](https://bmcbiol.biomedcentral.com/articles/10.1186/s12915-014-0073-5): Provides additional clustering approaches
+* [Super GWAS](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0107684): Uses a subset of markers to define the relationship
+* Multiple Loci Mixed linear Model (MLMM): Uses step-wise linear regression to add SNP to the model 
+* FarmCPU
+
+```{r, echo = T, eval = F}
+myGAPIT <- GAPIT(Y = phenos, GD = myGD, GM = myGM, PCA.total = 0, SNP.MAF = 0.05) #The default model uses CMLM
+
+myGAPIT2 <- GAPIT(Y = phenos, GD = myGD, GM = myGM,
+                  kinship.cluster = "ward.D", #how to cluster accessions
+                  kinship.group = "Max", #how to calculate kinship between clusters
+                  group.from = 1, #Min number of groups
+                  group.to = nrow(phenos), #Max number of groups
+                  group.by = 10)
+```
+
+
+## Determining an appropriate p-value threshold
+Here, we will use the Meff method from Li and Ji (2005) to calculate the appropriate p-value threshold. Since we know markers on separate chromosomes should be in LE, we will subset the data by chromosome.
+
+```{r, echo = T, eval = F}
+Li.Ji <- function(CORMAT){
+  abs.evs <- abs(eigen(CORMAT, only.values=TRUE)$values) #Get eigenvalues for correlation matrix
+  Meff <- sum( ifelse(abs.evs >= 1, 1, (abs.evs - floor(abs.evs))))
+  return(Meff)
+}
+
+nChr <- length(unique(genos$chr))
+
+Meffs <- NULL
+for (i in 1:nChr){
+  tmp <- as.matrix(genos[genos$chr %in% i ,][4:ncol(genos)])
+  
+  tmp <- cor(t(tmp))
+  
+  Meffs <- c(Meffs, Li.Ji(tmp))
+}
+
+Meffs <- sum(Meffs)
+print(Meffs) #~3900
+
+p.thresh <- 1 - (1 - 0.05)^(1/Meffs) #1.315216e-05
+```
