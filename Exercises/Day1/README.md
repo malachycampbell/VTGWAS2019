@@ -6,3 +6,5 @@ These are all the file necessary to run the exercise on Day 1.
 * Genotypes.zip: Genotypic data for GWAS analysis. All this is post-processed data.
 * NumericGenos.txt: Genotypes in numberic format for GAPIT
 * VT_Phenotypes.csv: Phenotypes for the exercise
+* Day1Ex_Final.Rmd: R code for Day 1 exercise
+* Day1Ex_Final.html: HTML version of R code
