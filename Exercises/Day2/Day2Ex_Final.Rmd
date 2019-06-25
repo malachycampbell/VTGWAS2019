@@ -1,0 +1,317 @@
+---
+title: "Day2_Exercise - GWAS via whole genome regression"
+author: "Malachy Campbell"
+date: "6/23/2019"
+output: html_document
+---
+
+The purpose of this exercise is to introduce participants to GWAS using whole genome regression. The biggest difference between these methods and those discussed yesterday is that we fit all markers simulaneously as random effects, rather than one-by-one as fixed effects. The exercise will use the same datasets as yesterday. We will use two different packages for whole genome regression: rrBLUP and BGLR. The first you should be sort of familiar with, however today we will introduce some new functions. The last package will likely be new for everyone.
+
+## Ridge regression BLUP
+### Brief overview of ridge regression (RR) BLUP
+
+With RR BLUP our goal is to predict all SNP effects by regressing phenotypes on SNP genotypes. The model for RR BLUP is 
+
+$$ \mathbf{y} = \mathbf{X \beta + Wa + e}; \text{Var}(\mathbf{a}) \sim \mathbf{I \sigma^2_a} $$ 
+where $\mathbf{X}$ is an incidence matrix that relates $\mathbf{y}$ to fixed effects $\mathbf{\beta}$, $\mathbf{W}$ is the matrix of marker genotypes, $\mathbf{I_{m \times m}}$ is an identity matrix and $\sigma^2_a$ is the variance of SNP effects.
+
+RR BLUP treats markers as random and shrinks marker effects towards zero to reduce the variance. The closed form solution is $$\hat{a} = [\mathbf{W'W + \lambda I}]^{-1} \mathbf{W'y}; \lambda = \frac{\sigma^2_e}{\sigma^2_{a}} $$
+
+
+
+### Load genotypes and phenotypes
+The files we will use for analysis are the same as those that were used yesterday. There is no need to run all the preprocessing steps. You can simply load the files `NumericGenos.txt` and `Phenotypes.csv`. **You will have to reorder the genotypes by chromosome and positions.**
+
+*Hint: use the code on lines 371-374 of yesterday's exercise. Its under the header "Input for GAPIT"*
+
+You will have to drop the first three columns of the genotype file (marker names, chromosome, position) and make sure the genotype data is in matrix form. The code to do this is provided below. We'll save the first three columns for use later. **The genotype matrix needs to be n x m, so you will need to transpose it.**
+
+```{r, echo = T, eval = F}
+MAP <- genos[1:3]
+genos <- genos[4:ncol(genos)]
+genos <- as.matrix(genos)
+
+#Check if is a matrix 
+is.matrix(genos)
+
+#Set the row names of the matrix as the marker names
+row.names(genos) <- MAP$rs
+```
+
+### Running RR BLUP using the RR BLUP package
+The function for running rrBLUP is provided below. The argument Z is for the random effects, so this is where you pass to genotype matrix to the function. SE returns the standard error of random effects.
+
+
+*Notice that mixed.solve also provides an argument for K. Do not put the kinship matrix there for ridge regression BLUP You can run genomic BLUP with the same function by introducing your kinship matrix and setting Z = NULL*
+
+```{r, echo = T, eval = F}
+rrblup.mod <- mixed.solve(y, Z = NULL, K = NULL, X = NULL, method="REML", SE=F)
+```
+
+### Plotting the SNP effects
+The output from mixed solve is a list with with several elements. Pull out the snp effects and store them in an object called SNPeff. We will use this to create a dataframe an plot the SNP effects. You can access elements of the list by using `SNPeff <- rrblup.mod$`. If you type `SNPeff <- rrblup.mod$` and hit tab it will give you all the elements in the list. Pull out the one for the random effects. So if the element in the list with the random effects is called `randomeff` we would use `SNPeff <- rrblup.mod$randomeff` to pull them out and store them in the SNPeff object.
+
+
+I've provided a function below that will generate a manhattan plot, but rather than plotting -log10(p) on the y axis it will plot the absolute value of the predicted marker effects. It needs a dataframe with the chromosome (column name CHR).
+
+```{r, echo = T, eval = F}
+rrBLUP.mrkeffs <- data.frame(CHR = MAP$chr, BP = MAP$bp, Beta = abs(SNPeff))
+```
+
+```{r, echo = T, eval = F}
+manhattan.Beta <- function(dataframe, colors = c("gray10", "gray50"), ymax = "max", xaxis.cex = 1, yaxis.cex = 1, limitchromosomes = 1:23, suggestiveline = NULL, genomewideline = NULL, annotate=NULL, Title, ...) {
+  
+  d=dataframe
+  ymax=max(d$Beta)
+  ymin=min(d$Beta)
+  
+  #throws error if you don't have columns named CHR, BP, and P in your data frame.
+  if (!("CHR" %in% names(d) & "BP" %in% names(d) & "Beta" %in% names(d))) stop("Make sure your data frame contains columns CHR, BP, and Beta")
+  
+  # limits chromosomes to plot. (23=x, 24=y, 25=par?, 26=mito?)
+  if (any(limitchromosomes)) d=d[d$CHR %in% limitchromosomes, ]
+  
+  # remove na's, sort by CHR and BP, and keep snps where 0<P<=1
+  d = d[order(d$CHR, d$BP), ]
+  
+  # sets colors based on colors argument.
+  colors <- rep(colors,max(d$CHR))[1:max(d$CHR)]
+  
+  # sets the maximum value on the y axis
+  if (ymax == "max") ymax<-ceiling(max(d$Beta))
+  
+  # creates continuous position markers for x axis for entire chromosome. also creates tick points.
+  d$pos = NA
+  ticks = NULL
+  lastbase = 0
+  numchroms = length(unique(d$CHR))
+  for (i in unique(d$CHR)) {
+    if (i == 1) {
+      d[d$CHR == i, ]$pos = d[d$CHR == i, ]$BP
+    } else {
+      lastbase=lastbase+tail(subset(d,CHR==i-1)$BP, 1)
+      d[d$CHR == i, ]$pos = d[d$CHR == i, ]$BP+lastbase
+    }
+    ticks=c(ticks, d[d$CHR == i, ]$pos[floor(length(d[d$CHR == i, ]$pos)/2)+1])
+  }
+  
+  # create the plot
+  # creates a blank plot
+  with(d, plot(pos, Beta, ylim = c(0,ymax), ylab = expression("|" ~ beta ~ "|"), xlab = "Chromosome", xaxt = "n", type = "n", cex = 0.3, yaxt = "n", main = Title, ...))
+  # then make an axis that has chromosome number instead of position
+  axis(1, at = ticks, lab = unique(d$CHR), cex.axis = xaxis.cex)
+  axis(2, cex.axis = yaxis.cex)
+  icol=1
+  for (i in unique(d$CHR)) {
+    with(d[d$CHR==i, ],points(pos, Beta, col=colors[icol], cex=0.3, ...))
+    icol = icol+1
+  }
+  
+  # create a new data frame with rows from the original data frame where SNP is in annotate character vector.
+  # then plot those points over the original graph, but with a larger point size and a different color.
+  if (!is.null(annotate)) {
+    d.annotate=d[which(d$SNP %in% annotate), ]
+    icol=1
+    for (i in unique(d.annotate$CHR)) {
+      with(d.annotate[d.annotate$CHR==i, ], points(pos, Beta, col = "red", cex=0.5, pch = 20, ...))
+      icol = icol+1
+    }
+  }
+  
+  # add threshold lines
+  if (!is.null(suggestiveline)) abline(h=suggestiveline, col="blue")
+  if (!is.null(genomewideline)) abline(h=genomewideline, col="red")
+}
+```
+
+```{r, echo = T, eval = F}
+manhattan.Beta(rrBLUP.mrkeffs, Title = "rrBLUP")
+```
+
+### Interpreting the results
+This is the same trait that was used in yesterday's exercise. I expect to see a very large peak on chomosome 4. However, in the plot that large peak is absent. What is going on??
+
+## Bayesian whole genome regression
+Ridge regression BLUP is a bit restrictive. We make an assumption about the genetic architecture of our trait, and shrink marker effects so that we can fit them all simulaneously in the model. This may not be an issue for prediction as even the large effect loci only account for a small portion of the additive genetic variance. However, as shown above this has a pretty significant impact on inference.
+
+Bayesian whole genome regression gives a lot of flexibility. If we have some knowledge about what the genetic architecture of our trait is like, then we can choose an appropriate prior that reflects that. The downside is that there is often a lot to consider when running Bayesian WGR (the choice of prior, the appropriate hyperparameters, the number of iterations, burnin in, thinning). All of these will have an impact on your results. The code below should give you a brief introduction of Bayesian WGR. With the exception of a few models we use the default settings for BGLR. For instruction purposes this is fine, but of you wish to use these models in your own research you should tune the parameters to give you the best results.
+
+### BGLR package
+The syntax for BGLR can seem a bit confusing. All analyses are run using the BGLR command. BGLR takes a several inputs. The predictors are stored in the `ETA` object, which is a list of lists where each element in the list is a predictor. Within each sublist we need to specify the matrix of predictors and the type of prior we want to use with it. Below I'll show a couple examples for some models that we discussed in the lecture.
+
+Although the notation is a little different from class, these models are nothing new. In both, the terms $\mathbf{X\beta}$ is to model the fixed effects (location, year, etc.). $\mathbf{X}$ is an incidence matrix that relates $\beta$ to observations. Since we are using BLUEs and have already accounted for the systematic effects, our model will only include a fixed intercept. Conveniently, BGLR introduces the intercept by default in the model, so there is no need to specify it.
+
+Now we'll set up `ETA` for the first model. The first model ($\mathbf{y} = \mathbf{X\beta + Wa + e}$) shows regression of the phenotype on markers ($\mathbf{W}$) (i.e. whole genome regression). So the matrix $\mathbf{W}$ is $n \times m$, where $n$ is the number of observations and $m$ is the number of markers. 
+
+Say we wanted to fit these markers as random effects with a Gaussian prior. Then we will create a list with the marker matrix as a set of predictors and specify the correct prior using the model argument. We then add this list to the `ETA` object. This is done below.
+
+```{r, echo = T, eval = F}
+#Note: the marker matrix is different than rrBLUP, so we will need to convert it to an appropriate format using the code below
+#genos <- t(genos + 1)
+ETA[[2]] <- list(X = genos, model = "BRR")
+```
+
+The second model is the conventional genomic BLUP model. You can think of this as the mixed model for GWAS, but without the fixed SNP effect. If you remember, $\text{Var}(\mathbf{u}) \sim \sigma^2_g \mathbf{G}$ where $\mathbf{G}$ is an $n \ times n$ genomic relationship matrix. If we want to fit this model, we need to tell BGLR that we are going to use a covariance matrix. Rather than using the `X` arguement in the `ETA` lists, we use `K` instead. 
+
+We won't actually run this model since it is not GWAS. It is included only as an example. If `GRM` is our G matrix then the list would look like this. Notice that we specify RKHS in the model argument. RKHS means reproducing kernel Hilbert spaces regressions. This is equivalent to running GBLUP, however the details of reproducing kernel Hilbert spaces regressions are outside the scope of this workshop.
+
+```{r, echo = T, eval = F}
+ETA[[2]] <- list(K = GRM, model = "RKHS")
+```
+
+
+#### Bayesian Ridge Regression (BRR)
+Let's create the `ETA` list in one step. BGLR includes an intercept by default, so there is no need to supply it.
+
+First load the data. Use the same code that was used in the RR BLUP section. Use the chunk of code below to have it in the right format.
+
+```{r, echo = T, eval = F}
+MAP <- genos[1:3]
+genos <- genos[4:ncol(genos)]
+genos <- as.matrix(genos)
+
+genos <- t(genos + 1)
+```
+
+The argument `model` indicates the prior we want to use.
+```{r, echo = T, eval = F}
+ETA <- list(list(X = genos, model = "BRR"))
+```
+
+Now we'll run the model. We need to specify the number of iterations (MCMC chains), the number of intitial iterations we want to discard and how many we want to thin. BGLR will write some files to the disk. We can specify where these get saved with saveAt.
+```{r, echo = T, eval = F}
+library(BGLR)
+
+Y <- scale(phenos$Y, center = T, scale = F)
+
+BRRmodel <- BGLR(y = Y, ETA = ETA, nIter = 1500, burnIn = 150, thin = 5, saveAt = "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BRRmodel.1500.150_")
+```
+
+#### Basic diagonstics
+With Bayesian regression we are using some kind of MCMC method to sample our parameter space. One important thing to assess is how well the MCMC has sampled the space. The MCMC is provided a starting point and explores the space until it starts to come close to the optimum parameter value. The point of the burn in iterations is to drop those initial exloratory iterations. Well how do you know that the number of burn ins you specified is enough? Morover, how do you know the MCMC isn't jumping wildley in later iterations?
+
+One common diagostic are trace plots. These basically summarise how the MCMC performed during the model fitting. We can plot these pretty simply in BGLR. Here we'll generate a trace plot for the residual variance. BGLR writes a number of files to the disk. We extract those for the residual variance in the MCMC iterations and plot them.
+
+```{r, echo = T, eval = F}
+resVar <- scan("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BRRmodel.1500.150_varE.dat")
+plot(resVar, type = 'o', col = "red", cex = 0.5, ylab = expression(var[e]))
+abline(v = BRRmodel$burnIn/BRRmodel$thin, col = "black", lty = 3) #This is where the burnin iterations end
+```
+
+Explore the output of the BGLR function using the structure function (`str()`). Notice that there is a component called `$ ETA`. On that same line it says that it is a list of 1. When we set up the ETA list we only specified one sublist, the marker matrix with the type of prior. All the information associated with the marker will be stored in this element in the output.
+```{r, echo = T, eval = F}
+str(BRRmodel)
+```
+
+Let's quickly plot the marker effects and see where our top SNP lies. To access the SNP effects we have to parse the output. In `ETA` component of the output there is a element called `b`. These are the marker effects.
+
+```{r, echo = T, eval = F}
+BRRmodel.mrkeff <- data.frame(CHR = MAP$chr, BP = MAP$bp, Beta = abs(BRRmodel$ETA[[1]]$b))
+
+manhattan.Beta(BRRmodel.mrkeff, Title = "BRR")
+```
+
+Try increasing the number of iterations and discarding the first 2000 iterations. 
+```{r, echo = T, eval = F}
+Y <- scale(phenos$RtNa, center = T, scale = F)
+
+BRRmodel <- BGLR(y = Y, ETA = ETA, nIter = 12000, burnIn = 2000, thin = 5, saveAt = "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BRRmodel.12000.2000_")
+```
+
+```{r, echo = T, eval = F}
+resVar <- scan("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BRRmodel.12000.2000_varE.dat")
+plot(resVar, type = 'o', col = "red", cex = 0.5, ylab = expression(var[e]))
+abline(v = BRRmodel$burnIn/BRRmodel$thin, col = "black", lty = 3)
+
+BRRmodel.mrkeff <- data.frame(CHR = MAP$chr, BP = MAP$bp, Beta = abs(BRRmodel$ETA[[1]]$b))
+
+manhattan.Beta(BRRmodel.mrkeff, Title = "BRR")
+```
+
+Compare this plot with the manhattan plots in yesterday's lecture. Can you see the peak on chromosome 4? How do these compare with the first BRR model where we used only 1500 iterations and discarded the first 150?
+
+#### BayesA
+BayesA uses a scaled $t$ prior. So each marker has a unique variance. Lets see how this compares to BRR.
+Create the `ETA` list.
+```{r, echo = T, eval = F}
+ETA <- list(list(X = genos, model = "BayesA"))
+```
+
+```{r, echo = T, eval = F}
+Y <- scale(phenos$Y, center = T, scale = F)
+
+BayesAmodel <- BGLR(y = Y, ETA = ETA, nIter = 12000, burnIn = 2000, thin = 5, saveAt = "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BayesAmodel.12000.2000_")
+```
+
+```{r, echo = T, eval = F}
+resVar <- scan("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BayesAmodel.12000.2000_varE.dat")
+plot(resVar, type = 'o', col = "red", cex = 0.5, ylab = expression(var[e]))
+abline(v = BayesAmodel$burnIn/BayesAmodel$thin, col = "black", lty = 3)
+
+BayesAmodel.mrkeff <- data.frame(CHR = MAP$chr, BP = MAP$bp, Beta = abs(BayesAmodel$ETA[[1]]$b))
+
+manhattan.Beta(BayesAmodel.mrkeff, Title = "BayesA")
+```
+
+#### BayesB
+BayesB is like BayesA in that we use a scaled $t$ prior. However the difference is that we introduce another parameter $\pi$ which in BGLR is proportion of markers with non-zero effects. BGLR treats $\pi$ as an unknown in BayesB, so there is no need to select a $\pi$ value beforehand. The prior is given by $Beta(p_0, \pi_0)$.
+
+However we can also set the value of these with the counts and prob in for $p_0$ and $\pi_0$, respectively. The third option should give good results, but you should see how other values influence the results. You will have to change the names of model objects in the code of the trace plot and the manhattan plot.
+
+Create the `ETA` list.
+```{r, echo = T, eval = F}
+ETA <- list(list(X = genos, model = "BayesB"))
+ETA2 <- list(list(X = genos, model = "BayesB", counts = 2, probIn = 0.5))
+ETA3 <- list(list(X = genos, model = "BayesB", counts = 8, probIn = 0.368)) #Best
+```
+
+```{r, echo = T, eval = F}
+Y <- scale(phenos$Y, center = T, scale = F)
+
+BayesBmodel <- BGLR(y = Y, ETA = ETA, nIter = 12000, burnIn = 2000, thin = 5, saveAt = "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BayesBmodel.12000.2000_")
+
+BayesBmodel2 <- BGLR(y = Y, ETA = ETA2, nIter = 12000, burnIn = 2000, thin = 5, saveAt = "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BayesBmodel_2.12000.2000_")
+
+BayesBmodel3 <- BGLR(y = Y, ETA = ETA3, nIter = 12000, burnIn = 2000, thin = 5, saveAt = "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BayesBmodel_3.12000.2000_")
+```
+
+Check the trace plots.
+```{r, echo = T, eval = F}
+resVar <- scan("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BayesBmodel.12000.2000_varE.dat")
+plot(resVar, type = 'o', col = "red", cex = 0.5, ylab = expression(var[e]))
+abline(v = BayesBmodel$burnIn/BayesBmodel$thin, col = "black", lty = 3)
+```
+
+```{r, echo = T, eval = F}
+BayesBmodel.mrkeff <- data.frame(CHR = MAP$chr, BP = MAP$bp, Beta = abs(BayesBmodel$ETA[[1]]$b))
+
+manhattan.Beta(BayesBmodel.mrkeff, Title = "BayesB")
+```
+
+
+#### Bayes C
+Like BayesB, BGLR also treats $\pi$ as an unknown for BayesC (so it is BayesC$\pi$). BayesC is like BayesB in that we have the parameter $\pi$, however our prior is like BRR. So the slab part of our spike slab is a Gaussian distribution.
+
+```{r, echo = T, eval = F}
+ETA <- list(list(X = genos, model = "BayesC"))
+```
+
+```{r, echo = T, eval = F}
+Y <- scale(phenos$Y, center = T, scale = F)
+
+BayesCmodel <- BGLR(y = Y, ETA = ETA, nIter = 12000, burnIn = 2000, saveAt = "~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BayesCmodel.12000.2000_")
+```
+
+
+Check the trace plots.
+```{r, echo = T, eval = F}
+resVar <- scan("~/Documents/Dropbox/Work/Presentations/VT_GWAS_workshop/Day2Ex/BGLR/BayesCmodel.12000.2000_varE.dat")
+plot(resVar, type = 'o', col = "red", cex = 0.5, ylab = expression(var[e]))
+abline(v = BayesCmodel$burnIn/BayesCmodel$thin, col = "black", lty = 3)
+```
+
+```{r, echo = T, eval = F}
+BayesCmodel.mrkeff <- data.frame(CHR = MAP$chr, BP = MAP$bp, Beta = abs(BayesCmodel$ETA[[1]]$b))
+
+manhattan.Beta(BayesCmodel.mrkeff, Title = "BayesC")
+```
