@@ -1,0 +1,673 @@
+---
+title: "Bayesian whole-genome regression (Bayesian alphabet) for GWAS"
+author: "Malachy Campbell"
+date: "6/25/2019"
+header-includes:
+   - \usepackage{bbm}
+   - \usepackage{amsmath}
+   - \setbeameroption{show notes} 
+output: 
+  beamer_presentation:
+  theme: "CambridgeUS"
+  colortheme: "beaver"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, size = "footnotesize")
+library(rmutil)
+library(latex2exp)
+library(wesanderson)
+library(matrixcalc)
+library(MASS)
+library(extraDistr)
+library(rrBLUP)
+```
+
+## Overview
+- Intro to whole genome regression
+  - Dealing with $n << p$
+- Bayesian flavors
+  - Bayesian Ridge Regression
+  - Bayes A
+  - Bayes B
+  - Bayes C and Bayes C$\pi$
+
+## Quantitative genetics review
+
+\begin{align*}
+\mathbf{y} &= \mathbf{g + e} \\
+\end{align*}
+
+## Quantitative genetics review
+
+\begin{align*}
+\mathbf{y} &= \mathbf{g + e} \\
+\end{align*}
+
+- What is $\mathbf{g}$?
+
+## Quantitative genetics review
+
+\begin{align*}
+\mathbf{y} &= \mathbf{g + e} \\
+\mathbf{y} &= \sum_{j=1}^n a_j w_j + e
+\end{align*}
+
+- $\mathbf{g}$ is the summation of QTL effects across all QTL for each individual
+
+## Quantitative genetics review
+
+\begin{align*}
+\mathbf{y} &= \mathbf{g + e} \\
+\mathbf{y} &= \sum_{j=1}^n a_j w_j + e
+\end{align*}
+
+- $\mathbf{g}$ is the summation of QTL effects across all QTL for each individual
+
+## Quantitative genetics review
+
+- With GWAS we are interested in **estimating** $a_j$
+
+- With genomic prediction we are interested in **predicting** $\mathbf{g}$
+
+## Quantitative genetics review
+
+- With GWAS we are interested in **estimating** $a_j$
+
+- With genomic prediction we are interested in **predicting** $\mathbf{g}$
+
+- **Why not use a model that does both?**
+
+## Whole genome regression
+
+\begin{align*}
+\mathbf{y} &= \mathbf{g + e} \\
+\mathbf{y} &= \sum_{j=1}^n a_j w_j + e \\
+\end{align*}
+
+- Goal is to fit all markers and obtain all $a$'s simultaneously
+
+## Ordinary Least Squares (OLS)
+
+\begin{align*}
+\mathbf{y} &= \sum_{j=1}^n a_j w_j + e
+\end{align*}
+
+- Objective function for OLS
+
+$$\hat{a} = \textrm{argmin} \left\{\sum_i (y_i - \mu - \sum_{j=1}^p a_jw_{ij})^2 \right\} $$
+
+## Ordinary Least Squares (OLS)
+
+\begin{align*}
+\mathbf{y} &= \sum_{j=1}^n a_j w_j + e
+\end{align*}
+
+- Objective function for OLS
+
+$$\hat{a} = \textrm{argmin} \left\{\underbrace{\sum_i (y_i - \mu - \sum_{j=1}^p w_{ij}a_j)^2 }_\text{residual sum of squares (RSS)}\right\} $$
+
+## OLS for whole genome regression
+
+- Population size ($n$) = 500
+
+- Number of markers ($p$) = 2 - 450
+
+- $\text{Var(}\hat{a}) = [\mathbf{W'W}]^{-1} \sigma^2_e$
+
+  - $\mathbf{W}$: $n \times p$
+  
+  - $\sigma^2_e = 1$
+
+```{r, echo = F, eval = T}
+p <- seq(from = 2, to = 450,by = 2) #predictors
+x <- rbinom(prob =0.5, n = max(p)* 500, size = 1) # sample predictors
+X <- matrix(nrow = 500, ncol = max(p), data = x)
+varE <- 1
+VAR.OLS <- NULL
+for(j in 1:length(p)){ # loop over number of predictors
+ tmpX<-X[,1:p[j]]
+ C <- crossprod(tmpX)
+ CInv <- chol2inv(chol(C))
+ VAR.OLS <- c(VAR.OLS, mean(diag(CInv))*varE) #average variance of estimates
+}
+```
+
+```{r fig1, fig.height = 3, fig.width = 3, fig.align = "center"}
+
+plot(p, VAR.OLS,
+     ylab = TeX("$Var(\\hat{a})$"),
+     xlab = "No. of Predictors",
+     cex.lab = 0.75, cex.axis = 0.75,
+     type = "l",
+     col = wes_palette("Zissou1")[2])
+points(p, VAR.OLS,
+       pch = 19,
+       col = wes_palette("Zissou1")[2],
+       cex = 0.5)
+
+```
+
+## OLS for whole genome regression
+
+$$ \hat{\mathbf{a}} = [\mathbf{W'W}]^{-1}\mathbf{W'y}$$
+
+- If $p >> n$
+
+\footnotesize
+```{r, echo = T}
+p <- 2000 #no of markers
+w <- rbinom(prob = 0.5, n = p, size = 1) # simulate genotypes
+W <- matrix(nrow = 500, ncol = p, data = w)
+
+WW <- t(W) %*% W
+try(solve(WW))
+is.singular.matrix(WW)
+```
+
+## Dealing with $p >> n$
+- **Problem:** Variance increases with $p$; $\mathbf{W'W}$ is singular
+- **Solution**: Treat markers as random; shrink estimates towards 0
+  - Penalization methods
+  - Bayesian methods
+
+## Penalized methods
+- **Goal is to balance goodness-of-fit and model complexity**
+  - Goodness-of-fit: minimize the residual sum of squares
+
+  $$\sum_i (y_i - \mu - \sum_{j=1}^p a_j w_{ij})^2$$
+
+  - Model complexity: function of model unknowns 
+  
+  $$J(a)$$
+
+## Penalized methods
+- How do we obtain estimates for marker effects?
+
+- Solve the optimization function
+
+$$(\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\sum_i (y_i - \mu - \sum_{j=1}^p a_j w_{ij})^2 + \lambda J(a) \right\} $$
+- $\lambda$ is regularization parameter; $J(a)$ is penalty function
+
+- Minimizing the **penalized** sum of squares
+
+## Ridge regression BLUP
+
+$$(\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\sum_i (y_i - \mu - \sum_{j=1}^p a_j w_{ij})^2 + \frac{\sigma^2_e}{\sigma^2_{a}} \sum_{j=1}^p a_j^2 \right\} $$
+
+- Penalty function: $J(a) = \sum_{j=1}^p a_j^2$
+  - L2 Norm
+  
+- Regularization parameter: $\lambda = \frac{\sigma^2_e}{\sigma^2_{a}}$
+  -$\textrm{Var}(a) = \sigma^2_{a} \mathbf{I}$
+
+## Ridge regression BLUP
+
+$$(\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\sum_i (y_i - \mu - \sum_{j=1}^p a_j w_{ij})^2 + \frac{\sigma^2_e}{\sigma^2_{a}} \sum_{j=1}^p a_j^2 \right\}$$
+
+$$\hat{a} = [\mathbf{W'W + \lambda I}]^{-1} \mathbf{W'y} $$
+
+- Shrinks $\hat{a}$ towards zero (increases bias, but reduces variance)
+
+\note{
+How does this compare to the optimization problem for OLS?? What happens when lambda is near 0? What about when sigma e >> sigma g?
+}
+
+## Ridge regression BLUP: Summary
+
+$$y = \mu + \mathbf{Wa} + e $$
+$$ a \sim \textrm{N}(0, \mathbf{I}\sigma^2_{a}) \; ; e \sim \textrm{N}(0, \mathbf{I}\sigma^2_{e}) $$
+
+$$\hat{a} = [\mathbf{W'W + \lambda I}]^{-1} \mathbf{W'y} $$
+
+- **All markers** have a small, non-zero contribution to the phenotype (infinitesimal model)
+
+\note{
+Other approaches (e.g. LASSO) allow marker effect to be zero.?? What do you think about this approach? Are our assumptions reasonable?
+}
+
+## Ridge regression using rrBLUP
+```{r, out.height="175px", out.width="312px", fig.align="center"}
+knitr::include_graphics("RRBLUP.png")
+```
+
+## Thinking like a Bayesian
+
+- Frequentist: "What is the best estimate for model unknowns given the data?"
+
+- Bayesian: "What is the posterior density of the model unknowns given the data and hyperparameters?"
+ 
+ $$p(\mu,\boldsymbol{a},\sigma^2 | \boldsymbol{y, \omega})$$
+  
+  - This is proportional to the conditional density of the data given the unknowns and the joint prior density of model unknowns
+
+  $$p(\mu,\boldsymbol{a},\sigma^2 | \boldsymbol{y, \omega}) \propto p(\mathbf{y} | \mu,\boldsymbol{a},\sigma^2)\; p(\mu,\boldsymbol{a},\sigma^2 | \boldsymbol{\omega})$$
+
+## Bayesian Ridge regression
+
+- Optimization function for RR:
+$$(\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\sum_i (y_i - \mu - \sum_{j=1}^p a_jw_{ij})^2 + \frac{\sigma^2_e}{\sigma^2_{a}} \sum_{j=1}^p a_j^2 \right\}$$
+
+- After some fancy transformations:
+
+$$\small (\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\prod_i^n \text{exp} \left( \frac{(y_i - \mu - \sum_{j=1}^p a_j w_{ij})^2}{2\sigma^2} \right) \right\} \left\{ \prod_{j=1}^p \text{exp} \left(-\frac{a^2_j}{2\sigma^2} \right) \right\}$$
+
+## Bayesian Ridge Regression (BRR)
+
+$$\small (\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\prod_i^n \text{exp} \left( \frac{(y_i - \mu - \sum_{j=1}^p a_j x_{ij})^2}{2\sigma^2} \right) \right\} \left\{ \prod_{j=1}^p \text{exp} \left(-\frac{a^2_j}{2\sigma^2} \right) \right\}$$
+
+- Probability density function for normal distribution $p(x|a,b) = \frac{1}{\sqrt{2 \pi b}} \text{exp} \left(-\frac{(x - a)^2}{2 b} \right)$
+
+- The mode of the posterior of the Bayesian model is equivalent to the RR solution
+  - Bayesian Ridge Regression = Bayesian WGR with Gaussian prior
+
+## BRR using the BGLR package
+```{r, out.height="175px", out.width="312px", fig.align="center"}
+knitr::include_graphics("BGLR1.png")
+```
+
+## BRR using the BGLR package
+```{r, out.height="175px", out.width="312px", fig.align="center"}
+knitr::include_graphics("BGLR2.png")
+```
+
+## Straying from the infinitesimal genetic architecture
+
+- Will all traits follow an infinitesimal model?
+  - infinitesimal model = QTL effects are normally distributed
+
+- How can we modify the Bayesian approach to fit different genetic architectures?
+
+## Straying from the infinitesimal genetic architecture
+
+- Will all traits follow an infinitesimal model? \textcolor{red}{probably not}
+  - infinitesimal model = QTL effects are normally distributed
+
+- How can we modify the Bayesian approach to fit different genetic architectures? \textcolor{red}{choose a different prior}
+
+
+## LASSO
+
+- **L**east **A**bsolute **S**hrinkage and **S**election **O**perator
+  - **Variable selection**: Some marker effects will be 0, others non-0
+  - Like RR, LASSO can be interpreted from both a frequentist and Bayesian perspective
+
+- Frequentist LASSO (L1 norm)
+$$(\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\sum_i (y_i - \mu - \sum_{j=1}^p w_{ij}a_j)^2 + \frac{\sigma^2_e}{\sigma^2_{a}} \sum_{j=1}^p |a_j| \right\}$$
+
+## Variable selection with LASSO
+```{r, out.height="175px", out.width="214px", fig.align="center"}
+knitr::include_graphics("GradientContour.png")
+```
+
+- $x$ and $y$-axis are the coefficients for the predictors; $z$-axis is the error
+  - OLS will find solutions to minimize the error
+
+## Variable selection with LASSO
+- Goal: find first point where the elliptical contours intersect the constraint region ($\sum_{j=1}^p |a_j|^q$)
+
+```{r, out.height="175px", out.width="340px", fig.align="center"}
+knitr::include_graphics("RRvLASSO.png")
+```
+
+- Blue ellipse is the RR solution, red is LASSO solution
+
+## Bayesian LASSO 
+$$(\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\sum_i (y_i - \mu - \sum_{j=1}^p a_j w_{ij})^2 + \frac{\sigma^2_e}{\sigma^2_{a}} \sum_{j=1}^p |a_j| \right\}$$
+
+$$\small (\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\prod_i^n \text{exp} \left( \frac{(y_i - \mu - \sum_{j=1}^p a_j w_{ij})^2}{2\sigma^2} \right) \right\} \left\{ \prod_{j=1}^p \text{exp} \left(-\frac{\lambda |a_j|}{2\sigma^2} \right) \right\}$$
+- The posterior is the same as RR, but the **prior is different**
+
+## Bayesian LASSO
+
+$$\small (\hat{\mu}, \hat{a}) = \textrm{argmin} \left\{\prod_i^n \text{exp} \left( \frac{(y_i - \mu - \sum_{j=1}^p x_{ij}a_j)^2}{2\sigma^2} \right) \right\} \left\{ \prod_{j=1}^p \text{exp} \left(-\frac{\lambda |a_j|}{2\sigma^2} \right) \right\}$$  
+
+- Probability density function for Laplace distribution: $f(x|a,b) = \frac{1}{2b}exp(\frac{-|x - a|}{b})$
+
+## Priors for Bayesian ridge and LASSO
+
+```{r,echo=FALSE, out.width='.49\\linewidth', fig.width=3, fig.height=3,fig.show='hold',fig.align='center', message=FALSE, warning=FALSE}
+x <- seq(-4,4,length=1000)
+plot(x, dnorm(x, mean = 0, sd = sqrt(1)), type = "l", xlab = TeX("$a_j$"), ylab = TeX("$p(a_j$)"), main = "N(0, 1)", col = "blue", lwd = 2)
+plot(x, dlaplace(x, m = 0, s = sqrt(1), log = F), type = "l", xlab = TeX("$a_j$"), ylab = TeX("$p(a_j$)"), main = "Laplace(0, 1)", col = "red", lwd = 2)
+```
+
+\note{
+Notice the differences between the two densities. The Laplace distribution has a higher mass at zero and thicker tails compared to the Gaussian density. What does this mean? Small effect markers are set to zero, while markers with larger effects are shrunk less.
+}
+
+## Different Bayesian flavors
+- ~~Bayesian Ridge Regression~~
+- ~~Bayesian LASSO~~
+- BayesA
+- BayesB
+- BayesC
+- BayesC$\pi$
+
+## BayesA: scaled $t$
+- Bayes A: Each marker has a marker-specific variance $a_j \sim \text{N}(0, \sigma^2_{a_j})$
+
+- Prior: Infinite mixture of normal distributions = scaled $t$ ($t(a_j | v, S^2_{a})$)
+
+  + Scale ($S^2_{a}$); degrees of freedom ($v$) 
+
+```{r,echo=FALSE, out.width='.49\\linewidth', fig.width=5, fig.height=3.5,fig.align='center'}
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+x <- seq(-4,4,length=1000)
+par(mar=c(2,3,1.5,3), mgp=c(1.8,0.5,0))
+plot(x, dlst(x = x, df = 2, mu = 0, sigma = 1), type = "l", xlab = TeX("$a_j$"), ylab = TeX("$p(a_j$)"), col = cbbPalette[1], lwd = 2, 
+     ylim = c(0, 0.45), cex = 0.5, cex.axis = 0.5)
+lines(x, dlst(x = x, df = 4, mu = 0, sigma = 1), type = "l", col = cbbPalette[2], lwd = 2)
+lines(x, dlst(x = x, df = 16, mu = 0, sigma = 1), type = "l", col = cbbPalette[3], lwd = 2)
+lines(x, dlst(x = x, df = 32, mu = 0, sigma = 1), type = "l", col = cbbPalette[4], lwd = 2)
+lines(x, dlst(x = x, df = 10000, mu = 0, sigma = 1), type = "l", col = cbbPalette[5], lwd = 2)
+lines(x, dnorm(x, mean = 0, sd = sqrt(1)), type = "l", col = cbbPalette[6], lwd = 2)
+
+legend("topright", legend = c(TeX("$t( v = 2, S^2_{a} = 1)$"),
+                              TeX("$t( v = 4, S^2_{a} = 1)$"),
+                              TeX("$t( v = 16, S^2_{a} = 1)$"),
+                              TeX("$t( v = 32, S^2_{a} = 1)$"),
+                              TeX("$t( v = 10000, S^2_{a} = 1)$"),
+                              TeX("$N( 0, \\sigma^2_{a} = 1)$")), 
+       bty = "n", pt.cex = 0.5, cex = 0.5, col = cbbPalette[1:6], lty = rep(1, 6), lwd = rep(2, 6))
+```
+
+\note{
+How does shrinkage with BayesA compare to RR?
+}
+
+## BayesA vs ridge regression
+
+- Small-effect loci: Shrunk closer to 0 with BayesA compared to RR
+
+- Large-effect loci: Less shrinkage with BayesA compared to RR
+
+- How is shrinkage affected by degrees of freedom ($v$)?
+
+## BayesB: spike-slab density
+- Like BayesA, with BayesB each marker has a marker-specific variance
+
+- Prior: Spike-slab
+  - Spike: marker effect will have point mass at 0 with a probability $\pi$
+  - Slab: marker effect will have $t$ distribution with scale ($S^2_{a}$) and degrees of freedom ($v$), and **a probability $1 - \pi$**
+  
+```{r, echo = F}
+N = 100000                 
+#Sample N random uniforms U
+U =runif(N)
+#Variable to store the samples from the mixture distribution                                             
+rand.samples1 = rep(NA,N)
+pi.0 <- 0.9
+#Sampling from the mixture
+for(i in 1:N){
+    if(U[i]<= pi.0){
+        rand.samples1[i] = 0
+    }else{
+        rand.samples1[i] = rlst(n = 1, df = 5, mu = 0, sigma = 1)
+    }
+}
+
+N = 100000                 
+#Sample N random uniforms U
+U =runif(N)
+#Variable to store the samples from the mixture distribution                                             
+rand.samples2 = rep(NA,N)
+pi.0 <- 0.6
+#Sampling from the mixture
+for(i in 1:N){
+    if(U[i]<= pi.0){
+        rand.samples2[i] = 0
+    }else{
+        rand.samples2[i] = rlst(n = 1, df = 5, mu = 0, sigma = 1)
+    }
+}
+
+N = 100000                 
+#Sample N random uniforms U
+U =runif(N)
+#Variable to store the samples from the mixture distribution                                             
+rand.samples3 = rep(NA,N)
+pi.0 <- 0.3
+#Sampling from the mixture
+for(i in 1:N){
+    if(U[i]<= pi.0){
+        rand.samples3[i] = 0
+    }else{
+        rand.samples3[i] = rlst(n = 1, df = 5, mu = 0, sigma = 1)
+    }
+}
+
+N = 100000                 
+#Sample N random uniforms U
+U =runif(N)
+#Variable to store the samples from the mixture distribution                                             
+rand.samples4 = rep(NA,N)
+pi.0 <- 0.0001
+#Sampling from the mixture
+for(i in 1:N){
+    if(U[i]<= pi.0){
+        rand.samples4[i] = 0
+    }else{
+        rand.samples4[i] = rlst(n = 1, df = 5, mu = 0, sigma = 1)
+    }
+}
+```
+
+
+```{r, echo=FALSE, out.width='.49\\linewidth', fig.width=5, fig.height=3.5,fig.align='center'}
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+par(mar=c(2,3,1.5,3), mgp=c(1.8,0.5,0))
+
+plot(density(rand.samples2), xlab = "", ylab = "Density", col = cbbPalette[1], lwd = 2, cex = 0.5, cex.axis = 0.5, main = TeX("$t(v=5, S^2_{a} = 1)$"))
+lines(density(rand.samples3), col = cbbPalette[2], lwd = 2)
+lines(density(rand.samples4), col = cbbPalette[3], lwd = 2)
+legend("topright", legend = c(TeX("$\\pi = 0.6$"), TeX("$\\pi = 0.3$"), TeX("$\\pi = 0.0001$")), 
+       bty = "n", pt.cex = 0.5, cex = 0.5, col = cbbPalette[1:3], lty = rep(1, 3), lwd = rep(2, 3))
+```
+
+## BayesB vs Bayes A
+
+- How does shrinkage compare between BayesA and BayesB for small-effect loci?
+
+  + Assume $\pi=0.3$
+
+```{r, echo=FALSE, out.width='.49\\linewidth', fig.width=5, fig.height=3.5,fig.align='center'}
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+par(mar=c(2,3,1.5,3), mgp=c(1.8,0.5,0))
+
+plot(density(rand.samples2), xlab = "", ylab = "Density", col = cbbPalette[1], lwd = 2, cex = 0.5, cex.axis = 0.5, main = TeX("$t(v=5, S^2_{a} = 1)$"))
+lines(density(rand.samples3), col = cbbPalette[2], lwd = 2)
+lines(density(rand.samples4), col = cbbPalette[3], lwd = 2)
+legend("topright", legend = c(TeX("$\\pi = 0.6$"), TeX("$\\pi = 0.3$"), TeX("$\\pi = 0.0001$")), 
+       bty = "n", pt.cex = 0.5, cex = 0.5, col = cbbPalette[1:3], lty = rep(1, 3), lwd = rep(2, 3))
+```
+
+## Bayes C and BayesC$\pi$
+* BayesC:
+  + Nearly the same as BayesB, however the prior is slightly different
+
+  + Prior: Spike-slab
+  
+    + Spike: marker effect will have point mass at 0 with a probability $\pi$
+    
+    + Slab: marker effect will follow a normal distribution ($\text{N}(0, \sigma^2_{a} | v, S^2_{a})$) and **a probability $1 - \pi$**
+    
+  + Assumes $\pi$ is known
+
+* BayesC$\pi$: $\pi$ is unknown
+
+  + Uniform (flat, uninformative) prior is assigned to $\pi$
+
+## Summary of Bayesian WGR methods
+\footnotesize
+
+* **BRR:** $a$'s assigned N(0, $\sigma^2_{a}$); variance parameter ($\sigma^2_{a}$) assigned $\chi^{-2}(\sigma^2_{a} |df_{a}, S_{a})$
+
+* **BL:** $a$'s assigned N(0, $\tau^2_{jk}\sigma^2_{e}$); marker-specific variance parameter ($\tau^2_{j}$) assigned $DE(\tau^2_{jk} | \frac{\lambda^2}{2})$
+
+* **BayesA:** $a$'s assigned N(0, $\sigma^2_{a_{j}}$); each marker-specific variance ($\sigma^2_{a_{j}}$) is assigned $\chi^{-2}(\sigma^2_{a_{j}} |df_{a}, S_{a})$ which is the same as a scaled $t$ dist.
+
+* **BayesB:** $a$'s assigned 0 with probability $\pi$ and N(0, $\sigma^2_{a_{j}}$) with probability (1 - $\pi$); each marker-specific variance ($\sigma^2_{a_{j}}$) is assigned $\chi^{-2}(\sigma^2_{a_{j}} |df_{a}, S_{a})$ which is the same as a scaled $t$ dist.
+
+* **BayesC:** $a$'s assigned 0 with probability $\pi$ and N(0, $\sigma^2_{a} | v, S^2_{a}$) with probability ($\pi$).
+
+  + **BayesC$\pi$**: BayesC with a flat prior on $\pi$
+
+## Inference on Bayesian models
+
+What is the genetic architecture for trait X?
+
+1. Define the model: Prior knowledge of unknown parameters, data generating process (likelihood)
+  
+  + $p(\mu, a, \sigma^2 | y, \omega) \propto \prod_{i=1}^n \text{N}(y_i| \mu + \sum_{j=1}^p w_{ij} a_j, \sigma^2) \prod{j=1}^p p(a_j | \omega) p(\sigma^2)$
+  
+2. Given some data estimate the unknown parameters via Markov chain Monte Carlo method
+  + Monte Carlo: Random sampling
+  + Markov Chain: Sequence wheer value for current iteration depends on previous iteration
+  
+## Gibbs sampling (very brief)
+
+0. Set initial values for all unknown parameters
+
+1. For iteration $i$ in 1:nIter
+
+  i. For predictor $p$ in 1:nPred, sample variable $p$ conditional on all others
+  ii. Repeat i. until $p$ == nPred
+2. Repeat 1.
+  
+  [Visualization of simple distribution](http://chi-feng.github.io/mcmc-demo/)
+
+## P-values for marker effects
+* For frequentist approaches calculating $p$-values is simple, for Bayesian... not so much
+
+* p-values for ridge regression
+
+  1. Define $t$-statistic: $t = \frac{\hat{a}}{\sqrt{Var(\hat{a})}}$
+  2. Get $p$-value: $p-value = 2(1 - \Phi(|t|))$; $\Phi$ is the CDF for the Normal dist.
+
+```{r, echo = F}
+M <- matrix(rep(0,200*1000),1000,200)
+for (i in 1:200) {
+  M[,i] <- ifelse(runif(1000)<0.5,-1,1)
+  }
+colnames(M) <- 1:200
+geno <- data.frame(marker=1:1000,chrom=rep(1,1000),pos=1:1000,M,check.names=FALSE)
+QTL <- 100*(1:5) #pick 5 QTL
+u <- rep(0,1000) #marker effects
+u[QTL] <- 1
+g <- as.vector(crossprod(M,u))
+h2 <- 0.5
+y <- g + rnorm(200,mean=0,sd=sqrt((1-h2)/h2*var(g)))
+pheno <- data.frame(line=1:200,y=y)
+```
+
+## P-values for RR-BLUP
+
+* In rrBLUP
+
+\footnotesize
+```{r, echo = T}
+foo <- mixed.solve(y = y, Z = t(geno[4:ncol(geno)]), 
+                   K = NULL, X = NULL, SE = T)
+str(foo)
+```
+
+## P-values for RR-BLUP
+
+* In rrBLUP
+
+\footnotesize
+```{r, echo = T}
+foo <- mixed.solve(y = y, Z = t(geno[4:ncol(geno)]), 
+                   K = NULL, X = NULL, SE = T)
+
+SNPe_ad <- foo$u / foo$u.SE
+pvals <- 2*(1-pnorm(abs(SNPe_ad)))
+```
+
+```{r, echo = F}
+manhattan <- function(dataframe, colors=c("gray10", "gray50"), ymax="max", xaxis.cex=1, limitchromosomes=1:23, suggestiveline=-log10(1e-5), genomewideline=-log10(5e-8), annotate=NULL, ...) {
+ 
+    d=dataframe
+    
+    #throws error if you don't have columns named CHR, BP, and P in your data frame.
+	if (!("CHR" %in% names(d) & "BP" %in% names(d) & "P" %in% names(d))) stop("Make sure your data frame contains columns CHR, BP, and P")
+    
+	# limits chromosomes to plot. (23=x, 24=y, 25=par?, 26=mito?)
+    if (any(limitchromosomes)) d=d[d$CHR %in% limitchromosomes, ]
+	
+	 # remove na's, sort by CHR and BP, and keep snps where 0<P<=1
+    d=subset(na.omit(d[order(d$CHR, d$BP), ]), (P>0 & P<=1))
+	
+	# -log10(p-value)
+	d$logp = -log10(d$P)
+	
+	# sets colors based on colors argument.
+    colors <- rep(colors,max(d$CHR))[1:max(d$CHR)]
+    
+	# sets the maximum value on the y axis (on the -log10p scale).
+    if (ymax=="max") ymax<-ceiling(max(d$logp))
+    if (ymax<8) ymax<-8
+    
+	# creates continuous position markers for x axis for entire chromosome. also creates tick points.
+    d$pos=NA
+    ticks=NULL
+	lastbase=0
+    numchroms=length(unique(d$CHR))
+    if (numchroms==1) {
+        d$pos=d$BP
+        ticks=floor(length(d$pos))/2+1
+    } else {
+        for (i in unique(d$CHR)) {
+        	if (i==1) {
+    			d[d$CHR==i, ]$pos=d[d$CHR==i, ]$BP
+    		} else {
+    			lastbase=lastbase+tail(subset(d,CHR==i-1)$BP, 1)
+    			d[d$CHR==i, ]$pos=d[d$CHR==i, ]$BP+lastbase
+    		}
+    		ticks=c(ticks, d[d$CHR==i, ]$pos[floor(length(d[d$CHR==i, ]$pos)/2)+1])
+    	}
+    }
+    
+	# create the plot
+    if (numchroms==1) {
+		# if you only have a single chromosome, the x axis is the chromosomal position
+        with(d, plot(pos, logp, ylim=c(0,ymax), ylab=expression(-log[10](italic(p))), xlab=paste("Chromosome",unique(d$CHR),"position"), ...))
+    }	else {
+		# if you have multiple chromosomes, first make the plot with no x-axis (xaxt="n")
+        with(d, plot(pos, logp, ylim=c(0,ymax), ylab=expression(-log[10](italic(p))), xlab="Chromosome", xaxt="n", type="n", cex=0.3, ...))
+		# then make an axis that has chromosome number instead of position
+        axis(1, at=ticks, lab=unique(d$CHR), cex.axis=xaxis.cex)
+        icol=1
+        for (i in unique(d$CHR)) {
+            with(d[d$CHR==i, ],points(pos, logp, col=colors[icol], cex=0.3, ...))
+            icol=icol+1
+    	}
+    }
+    
+	# create a new data frame with rows from the original data frame where SNP is in annotate character vector.
+	# then plot those points over the original graph, but with a larger point size and a different color.
+    if (!is.null(annotate)) {
+        d.annotate=d[which(d$SNP %in% annotate), ]
+        with(d.annotate, points(pos, logp, col="red", cex=0.5, ...))
+    }
+    
+	# add threshold lines
+    if (suggestiveline) abline(h=suggestiveline, col="blue")
+    if (genomewideline) abline(h=genomewideline, col="red")
+}
+```
+
+```{r, echo=FALSE, out.width='.49\\linewidth', fig.width=5, fig.height=3,fig.align='center'}
+manhattan(data.frame(CHR = geno$chrom, BP = geno$pos, P = pvals), cex = 0.2, col = c("black", "grey"))
+```
+
+## Bayesian inference
+
+* Frequentist $p$-values: the strength of association between y and x
+
+* Bayesian model frequency: proportion of samples in which $a$ has a non-zero effect
+  + BayesB
+  + BayesC and BayesC$\pi$
+
+## Questions??
