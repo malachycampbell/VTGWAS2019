@@ -19,6 +19,8 @@ row.names(genos) <- MAP$rs
 #Run RR-BLUP
 rrblup.mod <- mixed.solve(y = phenos$Y, Z = t(genos), K = NULL, X = NULL, method="REML", SE=F)
 
+SNPeff <- rrblup.mod$u
+
 #Create dataframe for manhattan plot
 rrBLUP.mrkeffs <- data.frame(CHR = MAP$chr, BP = MAP$bp, Beta = abs(SNPeff))
 
